@@ -109,36 +109,91 @@ export async function GET(req: NextRequest) {
 }
 
 // POST
-export async function PATCH(req: NextRequest) {
+export async function POST(req: NextRequest) {
   const { userId } = getAuth(req);
   if (!userId) return new Response("Unauthenticated request", { status: 403 });
-
   const { success } = await ratelimit.limit(userId);
   if (!success) return new Response("Too many requests", { status: 429 });
 
-  // Parse and validate the request body
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const body = await req.json();
-  const validated = patchIssuesBodyValidator.safeParse(body);
+
+  const validated = postIssuesBodyValidator.safeParse(body);
 
   if (!validated.success) {
-    return new Response("Invalid body.", { status: 400 });
+    const message =
+      "Invalid body. " + (validated.error.errors[0]?.message ?? "");
+    return new Response(message, { status: 400 });
   }
 
   const { data: valid } = validated;
 
-  // Retrieve users from Clerk based on assigneeId (if provided)
-  let assigneeUser = null;
-  if (valid.assigneeId) {
-    const users = await clerkClient.users.getUserList({
-      userId: [valid.assigneeId],  // Fetch user by Clerk's user ID
-    });
-    assigneeUser = users.length > 0 ? users[0] : null;
-    if (!assigneeUser) {
-      return new Response("Assignee not found in Clerk", { status: 404 });
-    }
+  const issues = await prisma.issue.findMany({
+    where: {
+      creatorId: userId,
+    },
+  });
+
+  const currentSprintIssues = issues.filter(
+    (issue) => issue.sprintId === valid.sprintId && issue.isDeleted === false
+  );
+
+  const sprint = await prisma.sprint.findUnique({
+    where: {
+      id: valid.sprintId ?? "",
+    },
+  });
+
+  let boardPosition = -1;
+
+  if (sprint && sprint.status === "ACTIVE") {
+    // If issue is created in active sprint, add it to the bottom of the TODO column in board
+    const issuesInColum = currentSprintIssues.filter(
+      (issue) => issue.status === "TODO"
+    );
+    boardPosition = calculateInsertPosition(issuesInColum);
   }
 
-  // Fetch issues to update from Prisma based on IDs in the request
+  const k = issues.length + 1;
+
+  const positionToInsert = calculateInsertPosition(currentSprintIssues);
+
+  const issue = await prisma.issue.create({
+    data: {
+      key: `ISSUE-${k}`,
+      name: valid.name,
+      type: valid.type,
+      reporterId: valid.reporterId ?? "user_2PwZmH2xP5aE0svR6hDH4AwDlcu", // Rogan as default reporter
+      sprintId: valid.sprintId ?? undefined,
+      sprintPosition: positionToInsert,
+      boardPosition,
+      parentId: valid.parentId,
+      sprintColor: valid.sprintColor,
+      creatorId: userId,
+    },
+  });
+  // return NextResponse.json<PostIssueResponse>({ issue });
+  return NextResponse.json({ issue });
+}
+
+export async function PATCH(req: NextRequest) {
+  const { userId } = getAuth(req);
+  if (!userId) return new Response("Unauthenticated request", { status: 403 });
+  const { success } = await ratelimit.limit(userId);
+  if (!success) return new Response("Too many requests", { status: 429 });
+
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+  const body = await req.json();
+  const validated = patchIssuesBodyValidator.safeParse(body);
+
+  if (!validated.success) {
+    // eslint-disable-next-line
+    const message = "Invalid body. ";
+    return new Response(message, { status: 400 });
+  }
+
+  const { data: valid } = validated;
+
   const issuesToUpdate = await prisma.issue.findMany({
     where: {
       id: {
@@ -147,7 +202,6 @@ export async function PATCH(req: NextRequest) {
     },
   });
 
-  // Update the issues with the new data, including assigneeId
   const updatedIssues = await Promise.all(
     issuesToUpdate.map(async (issue) => {
       return await prisma.issue.update({
@@ -157,16 +211,17 @@ export async function PATCH(req: NextRequest) {
         data: {
           type: valid.type ?? undefined,
           status: valid.status ?? undefined,
-          assigneeId: assigneeUser ? assigneeUser.id : undefined,  // Assign Clerk's user ID
+          assigneeId: valid.assigneeId ?? undefined,
           reporterId: valid.reporterId ?? undefined,
           isDeleted: valid.isDeleted ?? undefined,
           sprintId: valid.sprintId === undefined ? undefined : valid.sprintId,
           parentId: valid.parentId ?? undefined,
+          
         },
       });
     })
   );
 
-  // Return the updated issues
+  // return NextResponse.json<PostIssueResponse>({ issue });
   return NextResponse.json({ issues: updatedIssues });
 }

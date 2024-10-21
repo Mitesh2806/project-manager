@@ -19,7 +19,7 @@ type NavItemType = {
 };
 
 const Sidebar: React.FC = () => {
-  const { project } = useProject();
+  
   const planningItems = [
     {
       id: "roadmap",
@@ -59,7 +59,7 @@ const Sidebar: React.FC = () => {
           <h2 className="-mb-[0.5px] text-sm font-semibold text-gray-600">
             Project-Manager
           </h2>
-          <p className="text-xs text-gray-500">Mitesh's Project</p>
+          <p className="text-xs text-gray-500">Mitesh&apos; Project</p>
         </div>
       </div>
       <NavList label={"PLANNING"} items={planningItems} />
